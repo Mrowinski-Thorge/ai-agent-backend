@@ -18,14 +18,13 @@ if not GROQ_API_KEY or not WEBSITE_PASSWORD:
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# --- AKTUALISIERTER PLANNER MIT IHREM GEWÜNSCHTEN MODELL ---
+# --- Planner Konfiguration ---
 PLANNER_MODEL = "llama-3.1-8b-instant"
-# KORREKTUR: Mixtral durch das von Ihnen gewünschte Llama 70B Modell ersetzt.
-AVAILABLE_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+AVAILABLE_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"
 AVAILABLE_TOOLS = ["retrieval", "code_interpreter"]
 
 PLANNER_SYSTEM_PROMPT = f"""
-Du bist ein Planungs-Agent. Analysiere die Anfrage und erstelle einen optimalen Ausführungsplan als JSON.
+Du bist ein Planungs-Agent. Analysiere die Anfrage und erstelle den besten Plan als JSON.
 
 **Verfügbare Ressourcen:**
 - Modelle: {AVAILABLE_MODELS}
@@ -33,11 +32,10 @@ Du bist ein Planungs-Agent. Analysiere die Anfrage und erstelle einen optimalen 
 
 **JSON-Schema:** {{ "final_model": "string", "final_tools": ["string"], "optimierter_prompt": "string" }}
 
-**REGELN:**
-- **Modus 'manual':** Respektiere die `user_overrides`.
-- **Modus 'automatic':** Wähle das beste Modell. Für komplexe Aufgaben, Code oder Analyse wähle 'llama-3.3-70b-versatile'. Für einfache, schnelle Anfragen wähle 'llama-3.1-8b-instant'.
-- **Werkzeuge:** Gib NUR 'retrieval' oder 'code_interpreter' aus, wenn sie benötigt werden. Sonst eine LEERE Liste: `[]`.
-- **Prompt-Optimierung:** Passe den `optimierter_prompt` an das Ausgabeformat ('text', 'powerpoint', 'code') an.
+**Deine Aufgabe (Modus 'automatic'):**
+- Wähle das beste Modell: 'llama-3.3-70b-versatile' für komplexe Aufgaben, sonst 'llama-3.1-8b-instant'.
+- Wähle Werkzeuge: Aktiviere 'retrieval' oder 'code_interpreter' nur, wenn sie absolut notwendig sind. Sonst gib eine LEERE Liste `[]` zurück.
+- Optimiere den Prompt für das Ausgabeformat ('text', 'powerpoint', 'code').
 """
 
 def handle_powerpoint_creation(ai_json_response):
@@ -78,24 +76,51 @@ def generate_agent_response():
     if not user_prompt: return jsonify({"error": "Kein Prompt angegeben"}), 400
 
     try:
-        planner_context = f"""
-        Mode: "{mode}", User-Prompt: "{user_prompt}", Output-Format: "{output_format}", User-Overrides: {json.dumps(user_overrides)}
-        """
-        planner_messages = [{"role": "system", "content": PLANNER_SYSTEM_PROMPT}, {"role": "user", "content": planner_context}]
-        planner_completion = client.chat.completions.create(model=PLANNER_MODEL, messages=planner_messages, response_format={"type": "json_object"})
-        plan = json.loads(planner_completion.choices[0].message.content)
+        final_model = ""
+        final_tools_names = []
+        optimierter_prompt = ""
 
-        final_model = plan.get("final_model", "llama-3.1-8b-instant")
-        final_tools_names = [tool for tool in plan.get("final_tools", []) if tool]
-        executor_prompt = plan.get("optimierter_prompt")
+        if mode == 'manual':
+            # Im manuellen Modus werden die Werte direkt und sicher gesetzt.
+            final_model = user_overrides.get('model', 'llama-3.1-8b-instant')
+            
+            # Sichere Verarbeitung der Werkzeug-Auswahl
+            manual_tools = user_overrides.get('tools', {})
+            if manual_tools.get('websuche'):
+                final_tools_names.append('retrieval')
+            if manual_tools.get('code_interpreter'):
+                final_tools_names.append('code_interpreter')
+            
+            # Der Prompt wird direkt übernommen, da der Benutzer die Kontrolle hat.
+            optimierter_prompt = user_prompt
 
+        else: # mode == 'automatic'
+            # Nur im automatischen Modus wird der Planner befragt.
+            planner_context = f"""
+            User-Prompt: "{user_prompt}", Output-Format: "{output_format}"
+            """
+            planner_messages = [{"role": "system", "content": PLANNER_SYSTEM_PROMPT}, {"role": "user", "content": planner_context}]
+            planner_completion = client.chat.completions.create(model=PLANNER_MODEL, messages=planner_messages, response_format={"type": "json_object"})
+            plan = json.loads(planner_completion.choices[0].message.content)
+            
+            final_model = plan.get("final_model", "llama-3.1-8b-instant")
+            # Auch hier werden leere Einträge sicher gefiltert.
+            final_tools_names = [tool for tool in plan.get("final_tools", []) if tool]
+            optimierter_prompt = plan.get("optimierter_prompt", user_prompt)
+
+        # --- Executor-Phase ---
         system_prompt_executor = "Du bist ein Weltklasse-Experte."
         if output_format == 'code': system_prompt_executor = "Du bist ein erfahrener Software-Entwickler."
         elif output_format == 'powerpoint': system_prompt_executor = "Du bist ein Experte für Präsentationen."
 
-        executor_messages = [{"role": "system", "content": system_prompt_executor}, {"role": "user", "content": executor_prompt}]
+        executor_messages = [{"role": "system", "content": system_prompt_executor}, {"role": "user", "content": optimierter_prompt}]
         
-        completion_params = {"model": final_model, "messages": executor_messages}
+        # **DIE ENTSCHEIDENDE KORREKTUR**
+        completion_params = {
+            "model": final_model,
+            "messages": executor_messages
+        }
+        # Der 'tools'-Parameter wird NUR hinzugefügt, wenn die Liste NICHT leer ist.
         if final_tools_names:
             completion_params["tools"] = [{"type": name} for name in final_tools_names]
         
@@ -105,6 +130,7 @@ def generate_agent_response():
         executor_completion = client.chat.completions.create(**completion_params)
         ai_response_content = executor_completion.choices[0].message.content
 
+        # --- Ausgabe-Verarbeitung ---
         if output_format == 'powerpoint':
             ai_json = json.loads(ai_response_content)
             ppt_file = handle_powerpoint_creation(ai_json)
