@@ -1,0 +1,5 @@
+Flask
+Flask-Cors
+groq
+python-pptx
+gunicorn
