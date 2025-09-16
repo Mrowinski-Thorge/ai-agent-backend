@@ -19,7 +19,7 @@ if not GROQ_API_KEY or not WEBSITE_PASSWORD:
 client = Groq(api_key=GROQ_API_KEY)
 
 # --- NEU: Finaler Planner ---
-PLANNER_MODEL = "llama3.1-8b-instant"
+PLANNER_MODEL = "llama-3.1-8b-instant"
 AVAILABLE_MODELS = ["llama3.1-70b-versatile", "llama3.1-8b-instant", "mixtral-8x7b-32768"]
 AVAILABLE_TOOLS = ["retrieval", "code_interpreter"]
 
