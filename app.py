@@ -49,7 +49,7 @@ Erstelle ein JSON-Objekt basierend auf dem User-Prompt, dem `mode` und den `user
 
 **2. Wenn `mode` == "automatic":**
    - **Ignoriere `user_overrides`:** Du hast die volle Kontrolle.
-   - **Modellwahl:** Wähle 'llama3.1-70b-versatile' für komplexe Aufgaben/Code, sonst 'mixtral-8x7b-32768'.
+   - **Modellwahl:** Wähle 'llama3.1-70b-versatile' für komplexe Aufgaben/Code, sonst 'llama-3.1-8b-instant'.
    - **Werkzeugwahl:** Aktiviere 'retrieval' für aktuelle Infos. Aktiviere 'code_interpreter' für Berechnungen.
    - **URL-Recherche:** Wenn 'retrieval' nötig ist, weise den Executor im `optimierter_prompt` an, zuerst eine Websuche durchzuführen, um die besten URLs zum Thema zu finden, und DANN diese URLs zur Beantwortung der Frage zu nutzen. Setze `final_url` auf `null`.
    - **Optimiere den Prompt:** Erstelle eine sehr detaillierte Anweisung für den Executor.
