@@ -2,4 +2,5 @@ Flask
 Flask-Cors
 groq
 python-pptx
+requests
 gunicorn
