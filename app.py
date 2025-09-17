@@ -24,18 +24,16 @@ if not PEXELS_API_KEY:
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# --- KORREKTE MODELL-DEFINITIONEN BASIEREND AUF IHRER ANGABE ---
+# --- Korrekte Modell-Definitionen ---
 FAST_MODEL = "llama-3.1-8b-instant"
-POWERFUL_MODEL = "llama-3.3-70b-versatile" # Korrekter Name für das 70B Modell
-VALID_TOOLS = ["retrieval", "code_interpreter"] # Die exakten, gültigen Namen
+POWERFUL_MODEL = "llama-3.3-70b-versatile"
+VALID_TOOLS = ["retrieval", "code_interpreter"]
 
 # --- System-Prompts ---
 TRIAGE_SYSTEM_PROMPT = """
 Du bist ein Triage-Agent. Deine Aufgabe ist es, eine Benutzeranfrage zu bewerten.
 Antworte NUR mit dem Wort 'simple' wenn die Anfrage direkt und ohne Werkzeuge (Websuche, Code-Ausführung), komplexe Planung oder Bild-Erstellung beantwortet werden kann.
-Beispiele für 'simple': "Hallo", "Was ist die Hauptstadt von Frankreich?", "Fasse diesen Text zusammen: ...", "Übersetze 'Guten Morgen' ins Englische".
 Antworte NUR mit dem Wort 'complex' wenn die Anfrage Werkzeuge, eine PowerPoint-Präsentation, Code-Generierung, eine detaillierte Analyse oder aktuelle Informationen erfordert.
-Beispiele für 'complex': "Erstelle eine Präsentation über KI", "Schreibe ein Python-Skript für...", "Wie ist das aktuelle Wetter in Berlin?", "Durchsuche das Web nach...".
 Antworte NUR mit 'simple' oder 'complex'.
 """
 
@@ -43,9 +41,7 @@ PLANNER_SYSTEM_PROMPT = f"""
 Du bist ein Planungs-Agent. Deine Aufgabe ist es, für eine komplexe Anfrage den besten Ausführungsplan als JSON zu erstellen.
 **Verfügbare Werkzeuge:** {VALID_TOOLS}
 **JSON-Schema:** {{ "final_tools": ["string"], "optimierter_prompt": "string" }}
-**REGELN:**
-- Wähle Werkzeuge NUR aus der Liste {VALID_TOOLS}, wenn sie absolut notwendig sind. Sonst gib eine LEERE Liste `[]` zurück.
-- Optimiere den Prompt des Benutzers für die nachfolgende Aufgabe.
+**REGELN:** Wähle Werkzeuge NUR aus der Liste {VALID_TOOLS}, wenn sie absolut notwendig sind. Sonst gib eine LEERE Liste `[]` zurück.
 """
 
 POWERPOINT_SYSTEM_PROMPT = """
@@ -81,37 +77,63 @@ def search_pexels_image(query):
         print(f"Pexels API Fehler: {e}")
     return None
 
+# --- KORRIGIERTE UND ROBUSTE POWERPOINT-FUNKTION ---
 def handle_powerpoint_creation(ai_json_response):
     prs = Presentation()
-    slides_data = ai_json_response.get('slides', [])
-    if not slides_data: return None
-
-    prs.slide_width = Inches(16); prs.slide_height = Inches(9)
+    prs.slide_width = Inches(16)
+    prs.slide_height = Inches(9)
     
-    title_slide_layout = prs.slide_layouts[0]
-    slide = prs.slides.add_slide(title_slide_layout)
-    slide.shapes.title.text = slides_data[0].get('title', 'Präsentation')
-    slide.placeholders[1].text = "Erstellt vom Universal AI Agent"
-
-    for slide_info in slides_data:
-        slide_layout = prs.slide_layouts[5]
+    slides_data = ai_json_response.get('slides', [])
+    if not slides_data:
+        # Erstelle eine leere Titelfolie, wenn keine Daten kommen
+        slide_layout = prs.slide_layouts[0]
         slide = prs.slides.add_slide(slide_layout)
-        slide.shapes.title.text = slide_info.get('title', '')
+        slide.shapes.title.text = "Fehler: Keine Inhalte generiert"
+    else:
+        # 1. Erstelle eine dedizierte Titelfolie
+        title_slide_layout = prs.slide_layouts[0] # Layout: Titel und Untertitel
+        slide = prs.slides.add_slide(title_slide_layout)
+        slide.shapes.title.text = slides_data[0].get('title', 'Präsentation') # Titel von der ersten Folie
         
-        tf = slide.placeholders[1].text_frame; tf.clear()
-        for point in slide_info.get('content', []):
-            p = tf.add_paragraph(); p.text = str(point); p.level = 0
+        # Sicherer Zugriff auf den Untertitel-Platzhalter
+        if len(slide.placeholders) > 1:
+            slide.placeholders[1].text = "Erstellt vom Universal AI Agent"
+
+        # 2. Erstelle Inhaltsfolien für JEDE Folie aus den Daten
+        for slide_info in slides_data:
+            # Layout 5: Titel und Inhalt
+            content_layout = prs.slide_layouts[5]
+            slide = prs.slides.add_slide(content_layout)
             
-        image_stream = search_pexels_image(slide_info.get('image_search_query'))
-        if image_stream:
-            slide.shapes.add_picture(image_stream, Inches(8), Inches(1.5), height=Inches(4.5))
+            # Titel der Folie
+            slide.shapes.title.text = slide_info.get('title', '')
+            
+            # Inhalt (Stichpunkte)
+            # Sicherer Zugriff auf den Inhalts-Platzhalter (normalerweise Index 1 bei Layout 5)
+            if len(slide.placeholders) > 1:
+                content_shape = slide.placeholders[1]
+                tf = content_shape.text_frame
+                tf.clear() 
+                for point in slide_info.get('content', []):
+                    p = tf.add_paragraph()
+                    p.text = str(point)
+                    p.level = 0
+            
+            # Bild einfügen
+            image_stream = search_pexels_image(slide_info.get('image_search_query'))
+            if image_stream:
+                # Bild rechts platzieren
+                slide.shapes.add_picture(image_stream, Inches(8), Inches(1.5), height=Inches(4.5))
 
-        slide.notes_slide.notes_text_frame.text = slide_info.get('notes', '')
+            # Notizen hinzufügen
+            slide.notes_slide.notes_text_frame.text = slide_info.get('notes', '')
 
-    ppt_io = io.BytesIO(); prs.save(ppt_io); ppt_io.seek(0)
+    ppt_io = io.BytesIO()
+    prs.save(ppt_io)
+    ppt_io.seek(0)
     return ppt_io
 
-# --- Haupt-Route ---
+# --- Haupt-Route (unverändert) ---
 @app.route('/generate', methods=['POST'])
 def generate_agent_response():
     auth_header = request.headers.get('Authorization')
@@ -125,18 +147,15 @@ def generate_agent_response():
     if not user_prompt: return jsonify({"error": "Kein Prompt angegeben"}), 400
 
     try:
-        # --- Triage-Stufe ---
         triage_messages = [{"role": "system", "content": TRIAGE_SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}]
         triage_completion = client.chat.completions.create(model=FAST_MODEL, messages=triage_messages, temperature=0.0)
         decision = triage_completion.choices[0].message.content.strip().lower()
 
-        # --- Pfad 1: Einfache Anfrage ---
         if decision == 'simple' and output_format == 'text':
             simple_messages = [{"role": "system", "content": "Du bist ein hilfreicher Assistent. Antworte direkt und präzise."}, {"role": "user", "content": user_prompt}]
             simple_completion = client.chat.completions.create(model=FAST_MODEL, messages=simple_messages)
             return jsonify({"responseText": simple_completion.choices[0].message.content})
 
-        # --- Pfad 2: Komplexe Anfrage ---
         optimierter_prompt = user_prompt
         final_tools_names = []
 
@@ -146,10 +165,8 @@ def generate_agent_response():
             plan = json.loads(planner_completion.choices[0].message.content)
             
             optimierter_prompt = plan.get("optimierter_prompt", user_prompt)
-            # **ROBUSTE VALIDIERUNG:** Nur gültige Werkzeuge werden übernommen.
             final_tools_names = [tool for tool in plan.get("final_tools", []) if tool in VALID_TOOLS]
 
-        # --- Executor-Phase ---
         system_prompt = "Du bist ein Weltklasse-Experte."
         if output_format == 'powerpoint': system_prompt = POWERPOINT_SYSTEM_PROMPT
         elif output_format == 'code': system_prompt = "Du bist ein erfahrener Software-Entwickler."
@@ -166,7 +183,6 @@ def generate_agent_response():
         executor_completion = client.chat.completions.create(**completion_params)
         ai_response_content = executor_completion.choices[0].message.content
 
-        # --- Ausgabe-Verarbeitung ---
         if output_format == 'powerpoint':
             ai_json = json.loads(ai_response_content)
             ppt_file = handle_powerpoint_creation(ai_json)
