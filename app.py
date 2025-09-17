@@ -21,20 +21,21 @@ client = Groq(api_key=GROQ_API_KEY)
 # --- Planner Konfiguration ---
 PLANNER_MODEL = "llama-3.1-8b-instant"
 AVAILABLE_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
-AVAILABLE_TOOLS = ["retrieval", "code_interpreter"]
+# Die exakten, gültigen Namen der Werkzeuge
+VALID_TOOLS = ["retrieval", "code_interpreter"]
 
 PLANNER_SYSTEM_PROMPT = f"""
 Du bist ein Planungs-Agent. Analysiere die Anfrage und erstelle den besten Plan als JSON.
 
 **Verfügbare Ressourcen:**
 - Modelle: {AVAILABLE_MODELS}
-- Werkzeuge: {AVAILABLE_TOOLS}
+- Werkzeuge: {VALID_TOOLS}
 
 **JSON-Schema:** {{ "final_model": "string", "final_tools": ["string"], "optimierter_prompt": "string" }}
 
 **Deine Aufgabe (Modus 'automatic'):**
 - Wähle das beste Modell: 'llama-3.3-70b-versatile' für komplexe Aufgaben, sonst 'llama-3.1-8b-instant'.
-- Wähle Werkzeuge: Aktiviere 'retrieval' oder 'code_interpreter' nur, wenn sie absolut notwendig sind. Sonst gib eine LEERE Liste `[]` zurück.
+- Wähle Werkzeuge aus der Liste {VALID_TOOLS}. Gib NUR die exakten Namen zurück, wenn sie absolut notwendig sind. Sonst gib eine LEERE Liste `[]` zurück.
 - Optimiere den Prompt für das Ausgabeformat ('text', 'powerpoint', 'code').
 """
 
@@ -78,49 +79,52 @@ def generate_agent_response():
     try:
         final_model = ""
         final_tools_names = []
-        optimierter_prompt = ""
+        optimierter_prompt = user_prompt
 
         if mode == 'manual':
-            # Im manuellen Modus werden die Werte direkt und sicher gesetzt.
             final_model = user_overrides.get('model', 'llama-3.1-8b-instant')
-            
-            # Sichere Verarbeitung der Werkzeug-Auswahl
             manual_tools = user_overrides.get('tools', {})
-            if manual_tools.get('websuche'):
-                final_tools_names.append('retrieval')
-            if manual_tools.get('code_interpreter'):
-                final_tools_names.append('code_interpreter')
-            
-            # Der Prompt wird direkt übernommen, da der Benutzer die Kontrolle hat.
-            optimierter_prompt = user_prompt
-
+            if manual_tools.get('websuche'): final_tools_names.append('retrieval')
+            if manual_tools.get('code_interpreter'): final_tools_names.append('code_interpreter')
         else: # mode == 'automatic'
-            # Nur im automatischen Modus wird der Planner befragt.
-            planner_context = f"""
-            User-Prompt: "{user_prompt}", Output-Format: "{output_format}"
-            """
+            planner_context = f"User-Prompt: \"{user_prompt}\", Output-Format: \"{output_format}\""
             planner_messages = [{"role": "system", "content": PLANNER_SYSTEM_PROMPT}, {"role": "user", "content": planner_context}]
             planner_completion = client.chat.completions.create(model=PLANNER_MODEL, messages=planner_messages, response_format={"type": "json_object"})
             plan = json.loads(planner_completion.choices[0].message.content)
             
             final_model = plan.get("final_model", "llama-3.1-8b-instant")
-            # Auch hier werden leere Einträge sicher gefiltert.
-            final_tools_names = [tool for tool in plan.get("final_tools", []) if tool]
             optimierter_prompt = plan.get("optimierter_prompt", user_prompt)
+            
+            # **KORREKTUR 2: Whitelist-Validierung der Werkzeuge**
+            # Filtere alle vom Planner vorgeschlagenen Werkzeuge, die nicht in unserer GÜLTIGEN Liste sind.
+            suggested_tools = plan.get("final_tools", [])
+            final_tools_names = [tool for tool in suggested_tools if tool in VALID_TOOLS]
 
         # --- Executor-Phase ---
         system_prompt_executor = "Du bist ein Weltklasse-Experte."
-        if output_format == 'code': system_prompt_executor = "Du bist ein erfahrener Software-Entwickler."
-        elif output_format == 'powerpoint': system_prompt_executor = "Du bist ein Experte für Präsentationen."
+        
+        # **KORREKTUR 1: Sicherstellen, dass das Wort "JSON" im Prompt für PowerPoint enthalten ist**
+        if output_format == 'powerpoint':
+            system_prompt_executor = """
+            Du bist ein Experte für Präsentationen. Deine Aufgabe ist es, basierend auf dem User-Prompt ein JSON-Objekt zu erstellen.
+            Das JSON-Objekt muss exakt diesem Schema folgen:
+            {
+              "slides": [
+                {
+                  "title": "Titel der Folie",
+                  "content": ["Stichpunkt 1", "Stichpunkt 2"],
+                  "notes": "Notizen für den Sprecher"
+                }
+              ]
+            }
+            Antworte NUR mit dem validen JSON-Code.
+            """
+        elif output_format == 'code':
+            system_prompt_executor = "Du bist ein erfahrener Software-Entwickler. Liefere vollständigen, gut kommentierten Code."
 
         executor_messages = [{"role": "system", "content": system_prompt_executor}, {"role": "user", "content": optimierter_prompt}]
         
-        # **DIE ENTSCHEIDENDE KORREKTUR**
-        completion_params = {
-            "model": final_model,
-            "messages": executor_messages
-        }
-        # Der 'tools'-Parameter wird NUR hinzugefügt, wenn die Liste NICHT leer ist.
+        completion_params = {"model": final_model, "messages": executor_messages}
         if final_tools_names:
             completion_params["tools"] = [{"type": name} for name in final_tools_names]
         
